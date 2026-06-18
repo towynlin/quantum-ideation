@@ -1,0 +1,36 @@
+[project]
+name = "qrc-enso"
+version = "0.1.0"
+description = "Quantum reservoir computing for ENSO / Nino 3.4 forecasting (walking skeleton)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "pandas",
+    # reservoirpy's ESN tuner and ridge backend live in these extras; the bare
+    # package is insufficient. scikit-learn ceiling is what reservoirpy[sklearn] needs.
+    "scikit-learn>=0.24.2,<1.7.0",
+    "reservoirpy[hyper,sklearn]",
+]
+
+[project.optional-dependencies]
+# Quantum reservoir backend (U5) and the agent design-search loop (U7).
+# Kept optional so the data/evaluation/baseline core installs without the
+# heavier C++ stack.
+quantum = [
+    "qiskit",
+    "qiskit-aer",
+    "quantumreservoirpy",
+]
+dev = [
+    "pytest",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["qrc_enso*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
