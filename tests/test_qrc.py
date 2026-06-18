@@ -57,7 +57,7 @@ def test_more_shots_reduce_expectation_variance():
             .evolve(lo._encode_circuit(u))
             .evolve(lo._reservoir_circuit())
         )
-        return lo._z_expectations(sv.data, 3, False)[0]
+        return lo._z_expectations(sv.data)[0]
 
     truth = np.array([exact_z0(u) for u in inputs])
     lo_err = np.mean((np.array([lo.shot_expectation(u) for u in inputs]) - truth) ** 2)

@@ -6,14 +6,19 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from qrc_enso.baselines import Persistence
 from qrc_enso.evaluation import (
+    evaluate_model,
     make_folds,
     run_axis,
     skill_by_lead,
+    split_folds,
     spring_barrier_heatmap,
     _acc,
     _rmse,
 )
+
+from tests.conftest import ar1_series, raw_like_series
 
 
 def test_folds_have_no_temporal_leakage(anomalies):
@@ -63,6 +68,34 @@ def test_spring_barrier_trough_on_degraded_target_months():
     spring = hm[[3, 4, 5]].to_numpy()
     non_spring = hm[[1, 7, 11]].to_numpy()
     assert np.nanmean(spring) < np.nanmean(non_spring)
+
+
+def test_harness_normalization_is_per_fold_leakage_safe():
+    # Under per-fold normalization a future perturbation cannot reach back into
+    # an earlier fold's training anomalies or predictions. Under (wrong) global
+    # normalization it would shift the climatology and change them.
+    raw = raw_like_series(480)
+    folds = make_folds(raw, initial_train_months=240, stride_months=24, leads=(1, 3))
+    fold0 = folds[0]
+    raw2 = raw.copy()
+    future_pos = raw.index.get_loc(fold0.earliest_target) + 100  # well past fold0
+    raw2.iloc[future_pos] += 10.0
+
+    r1 = evaluate_model(Persistence(), raw, [fold0])
+    r2 = evaluate_model(Persistence(), raw2, [fold0])
+    pd.testing.assert_frame_equal(r1, r2)
+
+
+def test_split_folds_are_disjoint_and_sealed():
+    raw = ar1_series(480)
+    folds = make_folds(raw, initial_train_months=240, stride_months=6)
+    dev, rep = split_folds(folds, dev_fraction=0.7)
+    dev_origins = {f.origin for f in dev}
+    rep_origins = {f.origin for f in rep}
+    assert dev_origins and rep_origins
+    assert dev_origins.isdisjoint(rep_origins)
+    # Development folds are strictly earlier than the sealed reporting folds.
+    assert max(dev_origins) < min(rep_origins)
 
 
 def test_advantage_axis_protocol_round_trips(anomalies):

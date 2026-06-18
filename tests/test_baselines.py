@@ -41,8 +41,8 @@ def test_damped_persistence_phi_from_training_slice_only():
 def test_damped_beats_persistence_at_long_leads():
     s = ar1_series(480, phi=0.85)
     folds = make_folds(s, initial_train_months=240, stride_months=1, leads=(1, 6, 12))
-    pers = skill_by_lead(evaluate_model(Persistence(), s, folds))
-    damp = skill_by_lead(evaluate_model(DampedPersistence(), s, folds))
+    pers = skill_by_lead(evaluate_model(Persistence(), s, folds, normalize=False))
+    damp = skill_by_lead(evaluate_model(DampedPersistence(), s, folds, normalize=False))
     pers_rmse_12 = pers[pers["lead"] == 12]["rmse"].iloc[0]
     damp_rmse_12 = damp[damp["lead"] == 12]["rmse"].iloc[0]
     assert damp_rmse_12 < pers_rmse_12

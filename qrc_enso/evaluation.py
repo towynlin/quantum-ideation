@@ -6,15 +6,22 @@ forecast at the requested lead (not a recursive rollout). Metrics are computed
 directly with numpy/pandas -- ACC is a correlation, RMSE a two-liner, and the
 spring-barrier heatmap a groupby-pivot -- so no xarray/hindcast framework is
 pulled in.
+
+Leakage safety (R2) is enforced *here*, not left to caller discipline: folds
+carry the raw training series and ``evaluate_model`` fits a fresh anomaly
+normalizer on each fold's training window, transforming both the training data
+and the verification targets with that window's climatology alone.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
+
+from .data import MonthlyAnomalyNormalizer
 
 
 @runtime_checkable
@@ -36,14 +43,14 @@ class AdvantageAxis(Protocol):
     without harness edits.
     """
 
-    def apply(self, anomalies: pd.Series, folds: list["Fold"]) -> pd.DataFrame: ...
+    def apply(self, series: pd.Series, folds: list["Fold"]) -> pd.DataFrame: ...
 
 
 @dataclass(frozen=True)
 class Fold:
-    """One rolling-origin fold."""
+    """One rolling-origin fold (training data is *raw*, normalized per fold)."""
 
-    train: pd.Series  # anomalies up to and including the origin month
+    train: pd.Series  # raw series up to and including the origin month
     origin: pd.Timestamp  # last observed month
     targets: dict[int, pd.Timestamp]  # lead -> target month
 
@@ -52,17 +59,30 @@ class Fold:
         return min(self.targets.values())
 
 
+def fit_ridge(features: np.ndarray, target: np.ndarray, ridge: float) -> tuple[np.ndarray, float]:
+    """Closed-form ridge regression with a bias term.
+
+    Shared by the ESN and QRC readouts so the two reservoirs are scored through
+    an identical linear map (fairness) and the math lives in one place.
+    """
+    fc = features - features.mean(axis=0, keepdims=True)
+    tc = target - target.mean()
+    w = np.linalg.solve(fc.T @ fc + ridge * np.eye(fc.shape[1]), fc.T @ tc)
+    bias = float(target.mean() - features.mean(axis=0) @ w)
+    return w, bias
+
+
 def make_folds(
-    anomalies: pd.Series,
+    series: pd.Series,
     *,
     initial_train_months: int = 300,
     stride_months: int = 1,
     leads: tuple[int, ...] = (1, 3, 6, 9, 12),
 ) -> list[Fold]:
-    """Expanding-window rolling-origin folds.
+    """Expanding-window rolling-origin folds over the *raw* series.
 
-    Training window is the anomaly series up to and including the origin; targets
-    are strictly after the origin. By construction ``train`` never overlaps any
+    Training window is the series up to and including the origin; targets are
+    strictly after the origin. By construction ``train`` never overlaps any
     target month, so there is no temporal leakage. Shuffled / k-fold splits are
     intentionally not provided -- ENSO's multi-year autocorrelation makes them
     leak.
@@ -70,11 +90,10 @@ def make_folds(
     ``stride_months`` defaults to 1 so origins cycle through all 12 calendar
     months and the spring-barrier heatmap (init x target month) is fully
     populated. A stride that divides 12 (e.g. 6) collapses origins onto only a
-    couple of init months -- use 1, or a stride coprime with 12, to keep
-    init-month coverage. Larger strides bound cost for the heavier QRC runs at
-    the price of coverage.
+    couple of init months -- use 1, or a stride coprime with 12. Larger strides
+    bound cost for the heavier QRC runs at the price of coverage.
     """
-    index = anomalies.index
+    index = series.index
     if len(index) <= initial_train_months:
         raise ValueError("Series shorter than the initial training window.")
 
@@ -85,7 +104,7 @@ def make_folds(
         origin = index[origin_pos]
         targets = {lead: index[origin_pos + lead] for lead in leads}
         folds.append(
-            Fold(train=anomalies.iloc[: origin_pos + 1], origin=origin, targets=targets)
+            Fold(train=series.iloc[: origin_pos + 1], origin=origin, targets=targets)
         )
         origin_pos += stride_months
     if not folds:
@@ -93,14 +112,50 @@ def make_folds(
     return folds
 
 
-def evaluate_model(model: Model, anomalies: pd.Series, folds: list[Fold]) -> pd.DataFrame:
-    """Run a model across folds, returning tidy (origin, lead, pred, obs) rows."""
+def split_folds(
+    folds: list[Fold], dev_fraction: float = 0.7
+) -> tuple[list[Fold], list[Fold]]:
+    """Split folds into an earlier development set and a sealed reporting set.
+
+    The two sets are disjoint by origin (a contiguous split), so a design search
+    run on the development folds never sees the reporting folds it will later be
+    judged on -- preventing the search from overfitting the reporting set.
+    """
+    k = int(round(len(folds) * dev_fraction))
+    k = max(1, min(k, len(folds) - 1)) if len(folds) > 1 else len(folds)
+    return folds[:k], folds[k:]
+
+
+def evaluate_model(
+    model: Model,
+    series: pd.Series,
+    folds: list[Fold],
+    *,
+    normalize: bool = True,
+    normalizer_factory: Callable[[], MonthlyAnomalyNormalizer] = MonthlyAnomalyNormalizer,
+) -> pd.DataFrame:
+    """Run a model across folds, returning tidy (origin, lead, pred, obs) rows.
+
+    With ``normalize`` (the default), a fresh normalizer is fit on each fold's
+    raw training window and used to transform both the training input and the
+    verification target -- so the climatology a fold sees is strictly causal
+    (R2). Pass ``normalize=False`` only when the series is already an
+    anomaly/feature series that must not be renormalized.
+    """
     rows: list[dict] = []
     for fold in folds:
-        model.fit(fold.train)
+        norm = normalizer_factory().fit(fold.train) if normalize else None
+        train_in = norm.transform(fold.train) if norm is not None else fold.train
+        model.fit(train_in)
         for lead, target in fold.targets.items():
-            if target not in anomalies.index:
+            if target not in series.index:
                 continue
+            raw_obs = series.loc[target]
+            obs = (
+                float(norm.transform(series.loc[[target]]).iloc[0])
+                if norm is not None
+                else float(raw_obs)
+            )
             rows.append(
                 {
                     "origin": fold.origin,
@@ -108,7 +163,7 @@ def evaluate_model(model: Model, anomalies: pd.Series, folds: list[Fold]) -> pd.
                     "lead": int(lead),
                     "target_month": int(target.month),
                     "pred": float(model.predict(fold.origin, lead)),
-                    "obs": float(anomalies.loc[target]),
+                    "obs": obs,
                 }
             )
     return pd.DataFrame(rows)
@@ -157,6 +212,6 @@ def spring_barrier_heatmap(rows: pd.DataFrame) -> pd.DataFrame:
     return cells.pivot(index="init_month", columns="target_month", values="acc")
 
 
-def run_axis(axis: AdvantageAxis, anomalies: pd.Series, folds: list[Fold]) -> pd.DataFrame:
+def run_axis(axis: AdvantageAxis, series: pd.Series, folds: list[Fold]) -> pd.DataFrame:
     """Round-trip a caller-supplied advantage axis through the harness."""
-    return axis.apply(anomalies, folds)
+    return axis.apply(series, folds)

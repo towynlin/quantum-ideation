@@ -41,8 +41,16 @@ def test_matched_dimension_mismatch_is_refused_then_recordable():
 
     res = run_experiment(s, {"qrc": qrc, "esn": esn}, folds, require_matched_dims=False)
     assert res.manifest["matched_dims"] is False
-    assert res.manifest["qrc_readout_dim"] == 8
-    assert res.manifest["esn_readout_dim"] == 10
+    assert res.manifest["readout_dims"] == {"qrc": 8, "esn": 10}
+
+
+def test_matched_dimension_check_spans_all_models_not_just_qrc_esn():
+    s, folds = _short_setup()
+    # Two non-canonically-keyed models with mismatched dims must still be caught.
+    a = QRCReservoir(n_qubits=4, n_virtual=2, leads=(1, 3))  # dim 8
+    b = QRCReservoir(n_qubits=3, n_virtual=2, leads=(1, 3))  # dim 6
+    with pytest.raises(ValueError):
+        run_experiment(s, {"model_a": a, "model_b": b}, folds, require_matched_dims=True)
 
 
 def test_sanity_gate_records_failure_without_raising():

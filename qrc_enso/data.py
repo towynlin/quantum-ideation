@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import io
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -120,7 +120,7 @@ def _write_cache(series: pd.Series, cache_path: Path, source_url: str) -> None:
     header = (
         f"# Nino 3.4 raw SST snapshot\n"
         f"# source: {source_url}\n"
-        f"# fetched_utc: {datetime.utcnow().isoformat()}Z\n"
+        f"# fetched_utc: {datetime.now(timezone.utc).isoformat()}\n"
     )
     body = series.to_csv(index_label="date", header=["nino34_sst"])
     cache_path.write_text(header + body)

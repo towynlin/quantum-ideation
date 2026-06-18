@@ -5,7 +5,8 @@ description = "Quantum reservoir computing for ENSO / Nino 3.4 forecasting (walk
 requires-python = ">=3.11"
 dependencies = [
     "numpy",
-    "pandas",
+    # >=2.2 for DataFrameGroupBy.apply(include_groups=False) used in evaluation.py
+    "pandas>=2.2",
     # reservoirpy's ESN tuner and ridge backend live in these extras; the bare
     # package is insufficient. scikit-learn ceiling is what reservoirpy[sklearn] needs.
     "scikit-learn>=0.24.2,<1.7.0",
@@ -19,7 +20,6 @@ dependencies = [
 quantum = [
     "qiskit",
     "qiskit-aer",
-    "quantumreservoirpy",
 ]
 dev = [
     "pytest",
