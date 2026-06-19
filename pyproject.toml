@@ -24,13 +24,22 @@ quantum = [
 dev = [
     "pytest",
 ]
+# MPS parabolic-equation ocean-acoustics solver (the I1 direction). pyram is the
+# reference PE solver, pykrak the independent normal-mode cross-check, quimb the
+# tensor-network engine. pykrak is a v1 dependency (required independent reference),
+# not deferred.
+acoustics = [
+    "pyram",
+    "quimb",
+    "pykrak",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["qrc_enso*"]
+include = ["qrc_enso*", "mps_acoustics*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
