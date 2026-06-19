@@ -28,6 +28,13 @@ The specific dimension along which the quantum model is claimed to beat classica
 ### Matched readout dimension
 The fairness invariant requiring the quantum and classical models to expose the same number of readout features before their skill is compared, so a capacity difference cannot masquerade as an architectural advantage.
 
+## Cross-cutting
+
+### Bond dimension (χ)
+The measure of how much correlation/structure a tensor-network (MPS) representation carries — low χ means the object compresses well; high χ means it does not.
+
+It is the project's recurring regime diagnostic: a problem that stays low-χ is solvable cheaply by classical tensor methods, while a high-χ problem is exactly where a quantum approach could eventually pay off. Whether a given problem stays low-χ in realistic conditions is treated as an empirical question the work measures, not an assumption.
+
 ## Reservoir model
 
 ### Reservoir
