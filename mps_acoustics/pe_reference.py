@@ -109,16 +109,16 @@ def _interp_to_canonical(
     return out
 
 
-def pyram_reference(env: OceanEnvironment) -> ReferenceField:
-    """Run ``pyram`` on the Munk case and reconcile output to the common grid.
+def _build_pyram(env: OceanEnvironment):
+    """Construct a ``PyRAM`` instance for the Munk case on the canonical grid.
 
-    pyram chooses its own (non-power-of-two) grid; we drive it with an explicit
-    ``dz`` at the canonical resolution and interpolate its TL grid onto the U2
-    power-of-two depth axis over the shared extent.
+    Centralises the U2-environment -> ``pyram``-argument mapping so both the
+    reference run (:func:`pyram_reference`) and the starter extraction
+    (:func:`pyram_starter`) drive ``pyram`` identically -- every ``pyram`` call
+    stays isolated behind this module.
     """
     from pyram.PyRAM import PyRAM
 
-    depth_canonical = env.depth_grid()
     dz = _canonical_dz(env)
 
     # Water sound-speed profile: Munk over the water column, sampled at the
@@ -137,7 +137,7 @@ def pyram_reference(env: OceanEnvironment) -> ReferenceField:
     attn = np.array([[env.seabed_attn]])
     rbzb = np.array([[0.0, env.water_depth]])
 
-    pyram = PyRAM(
+    return PyRAM(
         env.freq,
         env.source_depth,
         env.receiver_depth,
@@ -155,13 +155,68 @@ def pyram_reference(env: OceanEnvironment) -> ReferenceField:
         rmax=env.range_max,
         lyrw=env.absorber_wavelengths,
     )
-    results = pyram.run()
+
+
+def pyram_reference(env: OceanEnvironment) -> ReferenceField:
+    """Run ``pyram`` on the Munk case and reconcile output to the common grid.
+
+    pyram chooses its own (non-power-of-two) grid; we drive it with an explicit
+    ``dz`` at the canonical resolution and interpolate its TL grid onto the U2
+    power-of-two depth axis over the shared extent.
+    """
+    depth_canonical = env.depth_grid()
+    results = _build_pyram(env).run()
 
     vz = results["Depths"]
     vr = results["Ranges"]
     tlg = results["TL Grid"]
     tl = _interp_to_canonical(depth_canonical, vz, tlg)
     return ReferenceField("pyram", depth_canonical, vr, tl)
+
+
+@dataclass(frozen=True)
+class StarterField:
+    """``pyram``'s self-starter field on the canonical 2^n depth axis.
+
+    The starter is the implicit-solve initial field RAM marches from (Collins
+    1993); the MPS path encodes *this* field rather than re-deriving the
+    self-starter (per the plan KTD). ``c0``/``k0``/``dr`` are pyram's reference
+    sound speed, reference wavenumber, and range step -- carried so the MPS
+    marcher can build split-step operators in the same reference frame.
+    """
+
+    depth: np.ndarray  # canonical 2^n depth axis (m), length Nz
+    field: np.ndarray  # complex starter pressure on that axis, length Nz
+    c0: float  # pyram reference sound speed (m/s)
+    k0: float  # pyram reference wavenumber omega / c0 (1/m)
+    dr: float  # pyram range step (m)
+
+
+def pyram_starter(env: OceanEnvironment) -> StarterField:
+    """Extract ``pyram``'s self-starter field onto the canonical depth grid.
+
+    Runs only ``pyram``'s ``setup()`` (profiles + self-starter + matrices),
+    *not* the range march, and interpolates the resulting field ``u`` from
+    pyram's internal depth axis onto the U2 power-of-two axis. The MPS marcher
+    (U5) encodes this field and steps it forward; reference frame constants
+    (``c0``, ``k0``, ``dr``) come back so the marcher matches pyram's family.
+    """
+    pyram = _build_pyram(env)
+    pyram.setup()
+
+    z_native = np.linspace(0.0, pyram._zmax, pyram.nz + 2)
+    u = np.asarray(pyram.u)
+    depth_canonical = env.depth_grid()
+    field = np.interp(depth_canonical, z_native, u.real) + 1j * np.interp(
+        depth_canonical, z_native, u.imag
+    )
+    return StarterField(
+        depth_canonical,
+        field,
+        c0=float(pyram._c0),
+        k0=float(pyram.k0),
+        dr=float(pyram._dr),
+    )
 
 
 def pykrak_reference(env: OceanEnvironment, ranges: np.ndarray) -> ReferenceField:
